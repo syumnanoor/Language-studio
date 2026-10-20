@@ -41,16 +41,25 @@ export function createHandler({env=process.env,fetcher=fetch,now=()=>new Date()}
     if(!b||typeof b!=='object'||Array.isArray(b)||JSON.stringify(b).length>1000000)throw fail('Invalid submission.');
    }
    const post=()=>{if(req.method!=='POST')throw fail('Use the form to submit.',405);};
+   if(path==='email-preview'||path==='email-session'){
+    post();if(typeof b.access_token!=='string'||b.access_token.length>10000)throw fail('This email link is invalid. Request a new one.');
+    const verified=await upstream('/auth/v1/user',{token:b.access_token});
+    if(path==='email-preview')return json(200,{email:verified.email});
+    if(typeof b.refresh_token!=='string'||b.refresh_token.length>2000)throw fail('This email link is invalid. Request a new one.');
+    const data=await upstream('/auth/v1/token?grant_type=refresh_token',{method:'POST',body:{refresh_token:b.refresh_token}});
+    if(data.user?.id!==verified.id)throw fail('This email link does not match the account.',403);
+    sessions(data);return json(200,{ok:true});
+   }
    if(['signup','login','recover','verify'].includes(path)){
     post();const email=String(b.email||'').trim();if(!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)||email.length>254)throw fail('Enter a valid email address.');
-    if(path==='recover'){await upstream('/auth/v1/recover',{method:'POST',body:{email}});return json(200,{message:'If this account exists, a recovery email is on its way. Use the email code below.'});}
+    if(path==='recover'){await upstream('/auth/v1/recover',{method:'POST',body:{email}});return json(200,{message:'If this account exists, a recovery email is on its way. Follow its link, or enter its code below.'});}
     if(path==='verify'){
      if(!['signup','recovery'].includes(b.type)||!/^\d{6,10}$/.test(String(b.code)))throw fail('Enter the email verification code.');
      const data=await upstream('/auth/v1/verify',{method:'POST',body:{email,token:b.code,type:b.type}});sessions(data);return json(200,{ok:true});
     }
     if(typeof b.password!=='string'||b.password.length<10||b.password.length>128)throw fail('Use a password of 10–128 characters.');
     const data=path==='signup'?await upstream('/auth/v1/signup',{method:'POST',body:{email,password:b.password,data:{name:String(b.name||'Learner').slice(0,60),level:'A1'}}}):await upstream('/auth/v1/token?grant_type=password',{method:'POST',body:{email,password:b.password}});
-    if(data.access_token)sessions(data);return json(200,{ok:true,verify:!data.access_token,message:data.access_token?'Welcome back.':'Check your email for your confirmation code.'});
+    if(data.access_token)sessions(data);return json(200,{ok:true,verify:!data.access_token,message:data.access_token?'Welcome back.':'Check your email. Follow the confirmation link, or enter a code if one is provided.'});
    }
    const cookies=Object.fromEntries(String(req.headers.cookie||'').split(';').map(c=>c.trim().split('=').map(decodeURIComponent)).filter(x=>x.length===2));
    let token=cookies[cookieName],user;
