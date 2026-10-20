@@ -17,6 +17,15 @@ export function createHandler({env=process.env,fetcher=fetch,now=()=>new Date()}
    if(!['GET','POST'].includes(req.method))throw fail('Method not allowed.',405);
    if(req.method==='POST'&&(req.headers.origin!==origin||!req.headers['content-type']?.startsWith('application/json')))throw fail('Reload this site before submitting.',403);
    if(path==='health')return json(200,{app:'italian-studio',version:'1.0.0',accounts:!!(env.SUPABASE_URL&&env.SUPABASE_ANON_KEY&&env.SUPABASE_SERVICE_ROLE_KEY)});
+   if(path==='review'){
+    if(req.method!=='POST')throw fail('Submit an answer with the lesson form.',405);
+    let input=req.body;
+    if(input===undefined){const parts=[];let size=0;for await(const part of req){size+=part.length;if(size>20000)throw fail('Answer too large.',413);parts.push(part);}input=Buffer.concat(parts).toString();}
+    const value=typeof input==='string'?JSON.parse(input):input;
+    const l=content.lessons.find(x=>x.id===value?.lesson),t=l?.tasks.find(x=>x.id===value?.task);
+    if(!t||typeof value.response!=='string')throw fail('Choose an activity and write an answer.');
+    return json(200,{id:randomUUID(),kind:'attempt',created:now().toISOString(),value:{lesson:l.id,task:t.id,response:value.response,...review(t,value.response),stage:t.stage,skill:l.skill||l.id,guest:true,assisted:!!value.assisted}});
+   }
    if(!env.SUPABASE_URL||!env.SUPABASE_ANON_KEY||!env.SUPABASE_SERVICE_ROLE_KEY)throw fail('Accounts are being connected. You can explore lessons while setup finishes.',503);
    const upstream=async(endpoint,{method='GET',body,token,key=env.SUPABASE_ANON_KEY}={})=>{
     const r=await fetcher(env.SUPABASE_URL+endpoint,{method,headers:{apikey:key,Authorization:`Bearer ${token||key}`,'Content-Type':'application/json',Prefer:'return=representation'},...(body===undefined?{}:{body:JSON.stringify(body)}),signal:AbortSignal.timeout(20000)});
