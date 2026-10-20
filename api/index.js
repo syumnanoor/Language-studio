@@ -1,3 +1,4 @@
+import {aiConfig,requestTeacher} from '../src/ai-provider.mjs';
 import {readFileSync} from 'node:fs';
 import {randomUUID,randomBytes,createHash} from 'node:crypto';
 import {review,skillEvidence} from '../src/grading.mjs';
@@ -16,7 +17,7 @@ export function createHandler({env=process.env,fetcher=fetch,now=()=>new Date()}
    const url=new URL(req.url,origin);let path=url.searchParams.get('route')||url.pathname.replace(/^\/api\/?/,'');
    if(!['GET','POST'].includes(req.method))throw fail('Method not allowed.',405);
    if(req.method==='POST'&&(req.headers.origin!==origin||!req.headers['content-type']?.startsWith('application/json')))throw fail('Reload this site before submitting.',403);
-   if(path==='health')return json(200,{app:'italian-studio',version:'1.1.0',accounts:!!(env.SUPABASE_URL&&env.SUPABASE_ANON_KEY&&env.SUPABASE_SERVICE_ROLE_KEY),aiTeacher:!!(env.CF_ACCOUNT_ID&&env.CF_AI_TOKEN)});
+   if(path==='health')return json(200,{app:'italian-studio',version:'1.1.0',accounts:!!(env.SUPABASE_URL&&env.SUPABASE_ANON_KEY&&env.SUPABASE_SERVICE_ROLE_KEY),aiTeacher:aiConfig(env).enabled,aiProvider:aiConfig(env).enabled?aiConfig(env).provider:null});
    if(path==='review'){
     if(req.method!=='POST')throw fail('Submit an answer with the lesson form.',405);
     let input=req.body;
@@ -78,7 +79,7 @@ export function createHandler({env=process.env,fetcher=fetch,now=()=>new Date()}
     await admin('/rest/v1/learning_records',{method:'POST',body:row});return row;
    };
    if(path==='coach'){
-    post();if(!env.CF_ACCOUNT_ID||!env.CF_AI_TOKEN)throw fail('The AI teacher is ready for its Cloudflare credentials.',503);
+    post();if(!aiConfig(env).enabled)throw fail('The AI teacher needs its API key in Vercel.',503);
     if(!['answer','transcript','progress'].includes(b.mode))throw fail('Choose an AI teacher activity.');
     let learnerText='',context='';
     if(b.mode==='answer'){
@@ -94,13 +95,13 @@ export function createHandler({env=process.env,fetcher=fetch,now=()=>new Date()}
      context='Summarise learning evidence without inventing mastery. Prioritise two repair targets and a short next-session plan. Do not award CEFR certification.';
     }
     const system=`You are the Italian Language Studio teacher for adult English- and Urdu-speaking learners. Be accurate, encouraging and concise. Preserve the learner's intended facts. Explain Italian in plain English and add one useful Urdu grammar comparison only when it genuinely clarifies the point. Never infer pronunciation from a transcript. Never override deterministic answer keys or award an official CEFR level. Return only valid JSON with keys summary, corrected, explanation, englishComparison, urduComparison, nextExercise, strengths, priorities, limitation. Each value must be a string, except strengths and priorities which are arrays of up to three short strings.`;
-    const request={model:env.CF_AI_MODEL||'google/gemini-4-argon',input:{contents:[{role:'user',parts:[{text:`${context}\n\nLearner material:\n${learnerText}`}]}],systemInstruction:{parts:[{text:system}]},generationConfig:{thinkingConfig:{thinkingLevel:'LOW'}}}};
-    const response=await fetcher(`https://api.cloudflare.com/client/v4/accounts/${encodeURIComponent(env.CF_ACCOUNT_ID)}/ai/run`,{method:'POST',headers:{Authorization:`Bearer ${env.CF_AI_TOKEN}`,'Content-Type':'application/json'},body:JSON.stringify(request),signal:AbortSignal.timeout(30000)});
+    const request={model:aiConfig(env).model,input:{contents:[{role:'user',parts:[{text:`${context}\n\nLearner material:\n${learnerText}`}]}],systemInstruction:{parts:[{text:system}]},generationConfig:{thinkingConfig:{thinkingLevel:'LOW'}}}};
+    const response=await requestTeacher(env,fetcher,request);
     const raw=await response.text();let data;try{data=JSON.parse(raw);}catch{throw fail('The AI teacher returned an unreadable response.',503);}if(!response.ok||data.success===false)throw fail(data.errors?.[0]?.message||'The AI teacher is temporarily unavailable.',503);
     const result=data.result??data,modelText=result.response||result.output_text||result.candidates?.[0]?.content?.parts?.map(x=>x.text||'').join('')||result.choices?.[0]?.message?.content;
     if(typeof modelText!=='string')throw fail('The AI teacher returned no written feedback.',503);
     let feedback;try{feedback=JSON.parse(modelText.replace(/^```json\s*|\s*```$/g,''));}catch{feedback={summary:modelText,corrected:'',explanation:'',englishComparison:'',urduComparison:'',nextExercise:'',strengths:[],priorities:[],limitation:'AI feedback is provisional.'};}
-    const safe={mode:b.mode,summary:String(feedback.summary||'').slice(0,2000),corrected:String(feedback.corrected||'').slice(0,4000),explanation:String(feedback.explanation||'').slice(0,4000),englishComparison:String(feedback.englishComparison||'').slice(0,2000),urduComparison:String(feedback.urduComparison||'').slice(0,2000),nextExercise:String(feedback.nextExercise||'').slice(0,3000),strengths:Array.isArray(feedback.strengths)?feedback.strengths.slice(0,3).map(x=>String(x).slice(0,500)):[],priorities:Array.isArray(feedback.priorities)?feedback.priorities.slice(0,3).map(x=>String(x).slice(0,500)):[],limitation:String(feedback.limitation||'AI feedback is provisional and may be wrong.').slice(0,1000),lesson:b.lesson||null,task:b.task||null,level:b.level||safeUser.level,model:env.CF_AI_MODEL||'google/gemini-4-argon'};
+    const safe={mode:b.mode,summary:String(feedback.summary||'').slice(0,2000),corrected:String(feedback.corrected||'').slice(0,4000),explanation:String(feedback.explanation||'').slice(0,4000),englishComparison:String(feedback.englishComparison||'').slice(0,2000),urduComparison:String(feedback.urduComparison||'').slice(0,2000),nextExercise:String(feedback.nextExercise||'').slice(0,3000),strengths:Array.isArray(feedback.strengths)?feedback.strengths.slice(0,3).map(x=>String(x).slice(0,500)):[],priorities:Array.isArray(feedback.priorities)?feedback.priorities.slice(0,3).map(x=>String(x).slice(0,500)):[],limitation:String(feedback.limitation||'AI feedback is provisional and may be wrong.').slice(0,1000),lesson:b.lesson||null,task:b.task||null,level:b.level||safeUser.level,model:aiConfig(env).model};
     const row=await save('coach',safe);return json(200,{...row.value,id:row.id,created:row.created});
    }
    if(path==='me'){const rows=await records();return json(200,{user:safeUser,records:rows,evidence:skillEvidence(rows)});}
