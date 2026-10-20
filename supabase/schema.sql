@@ -2,7 +2,7 @@
 create table if not exists public.learning_records (
  user_id uuid not null references auth.users(id) on delete cascade,
  id text not null,
- kind text not null check(kind in ('attempt','session','card','draft','exam','speaking')),
+ kind text not null check(kind in ('attempt','session','card','draft','exam','speaking','coach')),
  created timestamptz not null default now(),
  value jsonb not null,
  primary key(user_id,id)

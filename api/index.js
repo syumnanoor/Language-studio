@@ -16,7 +16,7 @@ export function createHandler({env=process.env,fetcher=fetch,now=()=>new Date()}
    const url=new URL(req.url,origin);let path=url.searchParams.get('route')||url.pathname.replace(/^\/api\/?/,'');
    if(!['GET','POST'].includes(req.method))throw fail('Method not allowed.',405);
    if(req.method==='POST'&&(req.headers.origin!==origin||!req.headers['content-type']?.startsWith('application/json')))throw fail('Reload this site before submitting.',403);
-   if(path==='health')return json(200,{app:'italian-studio',version:'1.0.0',accounts:!!(env.SUPABASE_URL&&env.SUPABASE_ANON_KEY&&env.SUPABASE_SERVICE_ROLE_KEY)});
+   if(path==='health')return json(200,{app:'italian-studio',version:'1.1.0',accounts:!!(env.SUPABASE_URL&&env.SUPABASE_ANON_KEY&&env.SUPABASE_SERVICE_ROLE_KEY),aiTeacher:!!(env.CF_ACCOUNT_ID&&env.CF_AI_TOKEN)});
    if(path==='review'){
     if(req.method!=='POST')throw fail('Submit an answer with the lesson form.',405);
     let input=req.body;
@@ -77,6 +77,32 @@ export function createHandler({env=process.env,fetcher=fetch,now=()=>new Date()}
     if(id.startsWith('draft-')){const old=await admin(`/rest/v1/learning_records?user_id=eq.${user.id}&id=eq.${encodeURIComponent(id)}`);if(old.length){await admin(`/rest/v1/learning_records?user_id=eq.${user.id}&id=eq.${encodeURIComponent(id)}`,{method:'PATCH',body:{value,created:row.created}});return row;}}
     await admin('/rest/v1/learning_records',{method:'POST',body:row});return row;
    };
+   if(path==='coach'){
+    post();if(!env.CF_ACCOUNT_ID||!env.CF_AI_TOKEN)throw fail('The AI teacher is ready for its Cloudflare credentials.',503);
+    if(!['answer','transcript','progress'].includes(b.mode))throw fail('Choose an AI teacher activity.');
+    let learnerText='',context='';
+    if(b.mode==='answer'){
+     const lesson=content.lessons.find(x=>x.id===b.lesson),task=lesson?.tasks.find(x=>x.id===b.task);
+     if(!task||typeof b.response!=='string'||!b.response.trim()||b.response.length>4000)throw fail('Submit a lesson answer first.');
+     learnerText=b.response;context=`Level ${lesson.level||'A1'}. Lesson: ${lesson.title}. Task: ${task.prompt}. Rule or goal: ${lesson.rule||lesson.goal||lesson.scene||''}. Server result: ${JSON.stringify(review(task,b.response))}. The server result remains authoritative for closed questions.`;
+    }else if(b.mode==='transcript'){
+     if(typeof b.transcript!=='string'||!b.transcript.trim()||b.transcript.length>12000||!['A1','A2','B1'].includes(b.level))throw fail('Add a transcript and choose a level.');
+     learnerText=b.transcript;context=`Italian speaking transcript for a ${b.level} learner. Task: ${String(b.prompt||'').slice(0,1000)}. Assess grammar, vocabulary, coherence and task completion from text only. Pronunciation and acoustic fluency are unassessed.`;
+    }else{
+     const all=await records(),attempts=all.filter(r=>r.kind==='attempt').slice(-100),sessionsDone=all.filter(r=>r.kind==='session'),exams=all.filter(r=>r.kind==='exam').slice(-9),spoken=all.filter(r=>r.kind==='speaking').slice(-10);
+     learnerText=JSON.stringify({level:safeUser.level,completedLessons:sessionsDone.map(r=>r.value.lesson),recentAttempts:attempts.map(r=>({lesson:r.value.lesson,task:r.value.task,correct:r.value.correct,stage:r.value.stage,assisted:r.value.assisted,retry:r.value.retry})),checkpoints:exams.map(r=>({exam:r.value.exam,score:r.value.score,passed:r.value.passed})),speaking:spoken.map(r=>({level:r.value.level,status:r.value.status}))});
+     context='Summarise learning evidence without inventing mastery. Prioritise two repair targets and a short next-session plan. Do not award CEFR certification.';
+    }
+    const system=`You are the Italian Language Studio teacher for adult English- and Urdu-speaking learners. Be accurate, encouraging and concise. Preserve the learner's intended facts. Explain Italian in plain English and add one useful Urdu grammar comparison only when it genuinely clarifies the point. Never infer pronunciation from a transcript. Never override deterministic answer keys or award an official CEFR level. Return only valid JSON with keys summary, corrected, explanation, englishComparison, urduComparison, nextExercise, strengths, priorities, limitation. Each value must be a string, except strengths and priorities which are arrays of up to three short strings.`;
+    const request={model:env.CF_AI_MODEL||'google/gemini-4-argon',input:{contents:[{role:'user',parts:[{text:`${context}\n\nLearner material:\n${learnerText}`}]}],systemInstruction:{parts:[{text:system}]},generationConfig:{thinkingConfig:{thinkingLevel:'LOW'}}}};
+    const response=await fetcher(`https://api.cloudflare.com/client/v4/accounts/${encodeURIComponent(env.CF_ACCOUNT_ID)}/ai/run`,{method:'POST',headers:{Authorization:`Bearer ${env.CF_AI_TOKEN}`,'Content-Type':'application/json'},body:JSON.stringify(request),signal:AbortSignal.timeout(30000)});
+    const raw=await response.text();let data;try{data=JSON.parse(raw);}catch{throw fail('The AI teacher returned an unreadable response.',503);}if(!response.ok||data.success===false)throw fail(data.errors?.[0]?.message||'The AI teacher is temporarily unavailable.',503);
+    const result=data.result??data,modelText=result.response||result.output_text||result.candidates?.[0]?.content?.parts?.map(x=>x.text||'').join('')||result.choices?.[0]?.message?.content;
+    if(typeof modelText!=='string')throw fail('The AI teacher returned no written feedback.',503);
+    let feedback;try{feedback=JSON.parse(modelText.replace(/^```json\s*|\s*```$/g,''));}catch{feedback={summary:modelText,corrected:'',explanation:'',englishComparison:'',urduComparison:'',nextExercise:'',strengths:[],priorities:[],limitation:'AI feedback is provisional.'};}
+    const safe={mode:b.mode,summary:String(feedback.summary||'').slice(0,2000),corrected:String(feedback.corrected||'').slice(0,4000),explanation:String(feedback.explanation||'').slice(0,4000),englishComparison:String(feedback.englishComparison||'').slice(0,2000),urduComparison:String(feedback.urduComparison||'').slice(0,2000),nextExercise:String(feedback.nextExercise||'').slice(0,3000),strengths:Array.isArray(feedback.strengths)?feedback.strengths.slice(0,3).map(x=>String(x).slice(0,500)):[],priorities:Array.isArray(feedback.priorities)?feedback.priorities.slice(0,3).map(x=>String(x).slice(0,500)):[],limitation:String(feedback.limitation||'AI feedback is provisional and may be wrong.').slice(0,1000),lesson:b.lesson||null,task:b.task||null,level:b.level||safeUser.level,model:env.CF_AI_MODEL||'google/gemini-4-argon'};
+    const row=await save('coach',safe);return json(200,{...row.value,id:row.id,created:row.created});
+   }
    if(path==='me'){const rows=await records();return json(200,{user:safeUser,records:rows,evidence:skillEvidence(rows)});}
    if(path==='logout'){post();await upstream('/auth/v1/logout',{method:'POST',token});clear();return json(200,{ok:true});}
    if(path==='profile'){post();const data={name:String(b.name||safeUser.name).slice(0,60),level:['A1','A2','B1'].includes(b.level)?b.level:safeUser.level};await upstream('/auth/v1/user',{method:'PUT',token,body:{data}});return json(200,{ok:true});}
