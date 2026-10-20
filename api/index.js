@@ -17,7 +17,7 @@ export function createHandler({env=process.env,fetcher=fetch,now=()=>new Date()}
    const url=new URL(req.url,origin);let path=url.searchParams.get('route')||url.pathname.replace(/^\/api\/?/,'');
    if(!['GET','POST'].includes(req.method))throw fail('Method not allowed.',405);
    if(req.method==='POST'&&(req.headers.origin!==origin||!req.headers['content-type']?.startsWith('application/json')))throw fail('Reload this site before submitting.',403);
-   if(path==='health')return json(200,{app:'italian-studio',version:'1.1.0',accounts:!!(env.SUPABASE_URL&&env.SUPABASE_ANON_KEY&&env.SUPABASE_SERVICE_ROLE_KEY),aiTeacher:aiConfig(env).enabled,aiProvider:aiConfig(env).enabled?aiConfig(env).provider:null});
+   if(path==='health')return json(200,{app:'italian-studio',version:'1.1.0',accounts:!!(env.SUPABASE_URL&&env.SUPABASE_ANON_KEY&&env.SUPABASE_SERVICE_ROLE_KEY),aiTeacher:aiConfig(env).enabled,aiProvider:aiConfig(env).enabled?aiConfig(env).provider:null,aiModel:aiConfig(env).enabled?aiConfig(env).model:null});
    if(path==='review'){
     if(req.method!=='POST')throw fail('Submit an answer with the lesson form.',405);
     let input=req.body;

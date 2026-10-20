@@ -8,7 +8,7 @@ test('Google takes precedence and keeps the key in a server header',async()=>{
  let count=0;
  const result=await requestTeacher(env,async(url,options)=>{
   count++;
-  assert.equal(url,'https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent');
+  assert.equal(url,'https://generativelanguage.googleapis.com/v1beta/models/gemini-3.5-flash-lite:generateContent');
   assert.equal(options.headers['x-goog-api-key'],'test-private');
   assert.ok(!url.includes('test-private'));
   const body=JSON.parse(options.body);

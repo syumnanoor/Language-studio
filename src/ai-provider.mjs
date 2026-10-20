@@ -1,6 +1,6 @@
 export function aiConfig(env) {
   if (env.GEMINI_API_KEY?.trim()) return {
-    enabled: true, provider: 'google', model: env.GEMINI_MODEL?.trim() || 'gemini-2.5-flash',
+    enabled: true, provider: 'google', model: env.GEMINI_MODEL?.trim() || 'gemini-3.5-flash-lite',
   };
   return {
     enabled: !!(env.CF_ACCOUNT_ID && env.CF_AI_TOKEN),
